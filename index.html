@@ -320,6 +320,19 @@ body.dragging,body.dragging *{cursor:grabbing!important}
   .fpath{font-size:11.5px}
   .fpath .s{display:block}
 }
+/* Wide screens: the page stays put and each bay scrolls by itself. The brief and parts bin on the left,
+   the files on the right, with the terminal held at the bottom of the right bay. */
+@media (min-width:861px) and (min-height:540px){
+  .app{height:100vh;height:100dvh;padding-block:14px;box-sizing:border-box}
+  .top{flex:none}
+  .board{flex:1;min-height:0;align-items:stretch;grid-template-rows:minmax(0,1fr)}
+  .side{position:static;max-height:none;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:2px 10px 2px 2px;scrollbar-gutter:stable}
+  .work{min-height:0}
+  .tree{flex:1 1 0;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:2px 10px 8px 2px;scrollbar-gutter:stable}
+  .term{flex:none;display:flex;flex-direction:column;max-height:46%}
+  .tbar,.won{flex:none}
+  .tbody{flex:1 1 auto;min-height:92px;overflow-y:auto;overscroll-behavior:contain}
+}
 @media (prefers-reduced-motion:reduce){
   .brick,.brick.bad,.cheer .brick,.demo .brick.new,.caret{animation:none;transition:none}
 }
@@ -3918,7 +3931,7 @@ function run(){
   persist(); renderLevels(); renderBoard(sv.result.ok); renderTerm();
   sfx(sv.result.ok?'win':'fail');
 }
-function go(i){ S.cur=Math.max(0,Math.min(LEVELS.length-1,i)); sel=null; persist(); renderAll(); window.scrollTo({top:0}); sfx('turn'); }
+function go(i){ S.cur=Math.max(0,Math.min(LEVELS.length-1,i)); sel=null; persist(); renderAll(); window.scrollTo({top:0}); document.querySelectorAll('.side,#tree,#tbody').forEach(x=>{x.scrollTop=0;}); sfx('turn'); }
 
 document.addEventListener('click',e=>{
   if(Date.now()-suppressClick<250) return;
@@ -3970,7 +3983,17 @@ document.addEventListener('keydown',e=>{
 /* ---------- drag and drop (mouse and pen; touch uses tap-to-place) ---------- */
 const ghost=$('ghost'), marker=document.createElement('div'); marker.className='marker';
 function clearDrop(){ marker.remove(); document.querySelectorAll('.over').forEach(x=>x.classList.remove('over')); }
-function endDrag(){ ghost.hidden=true; ghost.innerHTML=''; document.body.classList.remove('dragging'); clearDrop(); }
+let edgeTimer=null;
+function edgeScroll(){
+  if(!drag||!drag.active) return;
+  for(const pane of [$('tree'),document.querySelector('.side')]){
+    const r=pane.getBoundingClientRect();
+    if(drag.x<r.left||drag.x>r.right||pane.scrollHeight<=pane.clientHeight+1) continue;
+    const step=drag.y<r.top+56?-14:drag.y>r.bottom-56?14:0;
+    if(step) pane.scrollTop+=step;
+  }
+}
+function endDrag(){ clearInterval(edgeTimer); edgeTimer=null; ghost.hidden=true; ghost.innerHTML=''; document.body.classList.remove('dragging'); clearDrop(); }
 document.addEventListener('pointerdown',e=>{
   const el=e.target.closest('.brick');
   if(!el||!el.dataset.id||el.classList.contains('locked')||e.button!==0||e.pointerType==='touch') return;
@@ -3978,6 +4001,8 @@ document.addEventListener('pointerdown',e=>{
 });
 window.addEventListener('pointermove',e=>{
   if(!drag) return;
+  drag.x=e.clientX; drag.y=e.clientY;
+  if(drag.active&&!edgeTimer) edgeTimer=setInterval(edgeScroll,16);
   if(!drag.active){
     if(Math.hypot(e.clientX-drag.sx,e.clientY-drag.sy)<5) return;
     const r=drag.el.getBoundingClientRect();
