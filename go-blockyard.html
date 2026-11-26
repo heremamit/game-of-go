@@ -144,7 +144,8 @@ h1{font:700 21px/1 var(--display);margin:0;letter-spacing:-.01em}
 .k-tag{--k:var(--k-tag);--on:var(--on-tag)}
 .brick{position:relative;display:block;text-align:left;border:0;border-radius:5px;padding:8px 12px;margin:0;
   background:var(--k);color:var(--on);font:500 var(--code)/1.5 var(--mono);cursor:grab;max-width:100%;min-width:0;
-  box-shadow:inset 0 -2px 0 var(--shade);user-select:none;-webkit-user-select:none;transition:transform .12s ease}
+  box-shadow:inset 0 -2px 0 var(--shade);user-select:none;-webkit-user-select:none;transition:transform .12s ease;
+  touch-action:pan-y;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
 .brick::after{content:"";position:absolute;left:14px;bottom:-5px;width:18px;height:5px;background:var(--k);
   border-radius:0 0 3px 3px;box-shadow:inset 0 -2px 0 var(--shade)}
 .brick code{display:block;white-space:pre;tab-size:4;-moz-tab-size:4;overflow-x:auto;font-size:inherit;font-weight:500}
@@ -432,7 +433,7 @@ body.dragging,body.dragging *{cursor:grabbing!important}
       <h3>Controls</h3>
       <ul class="parts">
         <li><code>Mouse</code> Drag a block into a file, or back onto the bin.</li>
-        <li><code>Touch</code> Tap a block, then tap a dashed line.</li>
+        <li><code>Touch</code> Drag a block sideways into a file, or press and hold it for a moment to lift it and move it anywhere. Swiping up or down scrolls. You can also tap a block, then tap a dashed line.</li>
         <li><code>Keyboard</code> Tab to a block and press Enter to pick it up, then Tab to a dashed line and press Enter. Esc cancels, Delete sends the block back to the bin, Ctrl or Cmd + Enter runs.</li>
         <li><code>Sound</code> The button in the header turns it on or off.</li>
       </ul>
@@ -3987,23 +3988,36 @@ function edgeScroll(){
     if(step) pane.scrollTop+=step;
   }
 }
-function endDrag(){ clearInterval(edgeTimer); edgeTimer=null; ghost.hidden=true; ghost.innerHTML=''; document.body.classList.remove('dragging'); clearDrop(); }
+function endDrag(){ if(drag) clearTimeout(drag.hold); clearInterval(edgeTimer); edgeTimer=null; ghost.hidden=true; ghost.innerHTML=''; document.body.classList.remove('dragging'); clearDrop(); }
 document.addEventListener('pointerdown',e=>{
   const el=e.target.closest('.brick');
-  if(!el||!el.dataset.id||el.classList.contains('locked')||e.button!==0||e.pointerType==='touch') return;
-  drag={id:el.dataset.id,el,sx:e.clientX,sy:e.clientY,active:false,zone:null,idx:0};
+  if(!el||!el.dataset.id||el.classList.contains('locked')||e.button!==0||!e.isPrimary) return;
+  if(drag) clearTimeout(drag.hold);
+  drag={id:el.dataset.id,el,pid:e.pointerId,touch:e.pointerType==='touch',sx:e.clientX,sy:e.clientY,x:e.clientX,y:e.clientY,active:false,zone:null,idx:0};
+  /* touch: a sideways move lifts the block at once, an up-and-down swipe scrolls, press and hold lifts it for any direction */
+  if(drag.touch){ const d=drag; d.hold=setTimeout(()=>{ if(drag===d&&!d.active){ lift(); try{ if(navigator.vibrate) navigator.vibrate(8); }catch(x){} } },320); }
 });
+function lift(){
+  const r=drag.el.getBoundingClientRect();
+  drag.active=true; drag.ox=drag.sx-r.left; drag.oy=drag.sy-r.top;
+  const c=drag.el.cloneNode(true); c.classList.remove('sel','bad');
+  ghost.innerHTML=''; ghost.appendChild(c); ghost.style.width=r.width+'px'; ghost.hidden=false;
+  ghost.style.transform='translate('+(drag.x-drag.ox)+'px,'+(drag.y-drag.oy)+'px) rotate(-1.5deg)';
+  drag.el.classList.add('lifting'); document.body.classList.add('dragging'); sfx('pick');
+  if(!edgeTimer) edgeTimer=setInterval(edgeScroll,16);
+}
+/* once a block is lifted the finger moves the block, not the page */
+document.addEventListener('touchmove',e=>{ if(drag&&drag.active&&e.cancelable) e.preventDefault(); },{passive:false});
+document.addEventListener('contextmenu',e=>{ if(drag&&drag.touch&&e.target.closest&&e.target.closest('.brick')) e.preventDefault(); });
 window.addEventListener('pointermove',e=>{
-  if(!drag) return;
+  if(!drag||e.pointerId!==drag.pid) return;
   drag.x=e.clientX; drag.y=e.clientY;
-  if(drag.active&&!edgeTimer) edgeTimer=setInterval(edgeScroll,16);
   if(!drag.active){
-    if(Math.hypot(e.clientX-drag.sx,e.clientY-drag.sy)<5) return;
-    const r=drag.el.getBoundingClientRect();
-    drag.active=true; drag.ox=drag.sx-r.left; drag.oy=drag.sy-r.top;
-    const c=drag.el.cloneNode(true); c.classList.remove('sel','bad');
-    ghost.innerHTML=''; ghost.appendChild(c); ghost.style.width=r.width+'px'; ghost.hidden=false;
-    drag.el.classList.add('lifting'); document.body.classList.add('dragging'); sfx('pick');
+    const dx=Math.abs(e.clientX-drag.sx), dy=Math.abs(e.clientY-drag.sy);
+    /* a finger moving mostly up or down is probably scrolling: give the browser room to take the gesture over */
+    if(Math.hypot(dx,dy)<(drag.touch?(dy>dx?30:10):5)) return;
+    clearTimeout(drag.hold);
+    lift();
   }
   ghost.style.transform='translate('+(e.clientX-drag.ox)+'px,'+(e.clientY-drag.oy)+'px) rotate(-1.5deg)';
   clearDrop(); drag.zone=null;
@@ -4019,14 +4033,14 @@ window.addEventListener('pointermove',e=>{
   drag.idx=idx;
   if(idx<rows.length) zone.insertBefore(marker,rows[idx]); else zone.appendChild(marker);
 });
-window.addEventListener('pointerup',()=>{
-  if(!drag) return;
-  const d=drag; drag=null;
+window.addEventListener('pointerup',e=>{
+  if(!drag||e.pointerId!==drag.pid) return;
+  const d=drag; drag=null; clearTimeout(d.hold);
   if(!d.active) return;
   endDrag(); suppressClick=Date.now();
   if(d.zone) move(d.id,d.zone,d.idx); else { sel=null; renderBoard(); }
 });
-window.addEventListener('pointercancel',()=>{ if(drag&&drag.active){ endDrag(); renderBoard(); } drag=null; });
+window.addEventListener('pointercancel',e=>{ if(!drag||e.pointerId!==drag.pid) return; clearTimeout(drag.hold); if(drag.active){ endDrag(); renderBoard(); } drag=null; });
 
 /* ---------- boot ---------- */
 function start(data){
